@@ -61,23 +61,23 @@ class MediaImageMeta(db.Model):
     thumb_path = Column(String(512), nullable=False, default="")
     is_archive = Column(SmallInteger, nullable=False, default=0)
     main_color = Column(String(32), nullable=True, default=None)
+    page_count = db.Column(db.Integer, nullable=True, comment='总页数（压缩包或文件夹）')
 
+# class MediaZipChild(db.Model):
+#     __tablename__ = "media_zip_child"
 
-class MediaZipChild(db.Model):
-    __tablename__ = "media_zip_child"
+#     id         = Column(BigInteger, primary_key=True, autoincrement=True)
+#     media_id   = Column(BigInteger, nullable=False, index=True)
+#     file_name  = Column(String(512), nullable=False)
+#     thumb_path = Column(String(512), nullable=False, default="")
+#     file_path  = Column(String(512), nullable=False, default="")
+#     width      = Column(Integer, nullable=True, default=None)
+#     height     = Column(Integer, nullable=True, default=None)
+#     sort_order = Column(Integer, nullable=False, default=0)
 
-    id         = Column(BigInteger, primary_key=True, autoincrement=True)
-    media_id   = Column(BigInteger, nullable=False, index=True)
-    file_name  = Column(String(512), nullable=False)
-    thumb_path = Column(String(512), nullable=False, default="")
-    file_path  = Column(String(512), nullable=False, default="")
-    width      = Column(Integer, nullable=True, default=None)
-    height     = Column(Integer, nullable=True, default=None)
-    sort_order = Column(Integer, nullable=False, default=0)
-
-    __table_args__ = (
-        Index("idx_media_sort", "media_id", "sort_order"),
-    )
+#     __table_args__ = (
+#         Index("idx_media_sort", "media_id", "sort_order"),
+#     )
 
 
 class MediaNovelMeta(db.Model):
