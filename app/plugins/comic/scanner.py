@@ -1,5 +1,5 @@
 """
-漫画目录扫描器（极速版：快速指纹 + 详细耗时日志）
+漫画目录扫描器（极速版：原版逻辑还原 + 仅漫画类型脏数据清理）
 """
 
 import hashlib
@@ -33,6 +33,7 @@ class ScanStats:
     inserted: int = 0
     updated: int = 0
     skipped: int = 0
+    deleted: int = 0  # 仅统计media_type=1的删除数量
     errors: int = 0
     error_details: list = field(default_factory=list)
 
@@ -40,7 +41,8 @@ class ScanStats:
         return {
             "total": self.total, "inserted": self.inserted,
             "updated": self.updated, "skipped": self.skipped,
-            "errors": self.errors, "is_running": False,
+            "deleted": self.deleted, "errors": self.errors,
+            "is_running": False,
         }
 
 
@@ -178,22 +180,42 @@ def classify(path: Path) -> str:
 
 
 class ComicScanner:
-    def __init__(self, base_path: str | Path):
+    def __init__(self, base_path: str | Path, dry_run: bool = False):
+        """
+        :param base_path: 扫描根目录
+        :param dry_run: 干跑模式，True=只打印待删除内容不执行删除，False=实际执行删除
+        """
         self.base_path = Path(base_path).resolve()
         self.stats = ScanStats()
+        # 本次扫描所有有效文件/目录的media_id集合
+        self.valid_media_ids: set[int] = set()
+        # 干跑模式开关，首次使用强烈建议先设为True预览
+        self.dry_run = dry_run
 
     def scan(self) -> ScanStats:
         if not self.base_path.is_dir():
             raise FileNotFoundError(f"目录不存在: {self.base_path}")
-        logger.info("🚀 开始扫描: %s", self.base_path)
+        logger.info("🚀 开始扫描: %s (干跑模式=%s)", self.base_path, self.dry_run)
         scan_start = time.perf_counter()
+
+        # 重置扫描状态
+        self.stats = ScanStats()
+        self.valid_media_ids.clear()
+
+        # 执行递归扫描（原版逻辑完全还原）
         self._scan_dir(self.base_path, parent_id=None)
+
+        # 扫描完成后，执行仅漫画类型的脏数据清理
+        self._clean_expired_image_data()
+
+        # 最终事务提交
         db.session.commit()
+
         total_time = time.perf_counter() - scan_start
         logger.info(
-            "✅ 扫描完成  总耗时=%.2fs  总计=%d 新增=%d 更新=%d 跳过=%d 错误=%d",
+            "✅ 全流程完成  总耗时=%.2fs  总计=%d 新增=%d 更新=%d 跳过=%d 删除=%d 错误=%d",
             total_time, self.stats.total, self.stats.inserted, self.stats.updated,
-            self.stats.skipped, self.stats.errors
+            self.stats.skipped, self.stats.deleted, self.stats.errors
         )
         return self.stats
 
@@ -231,6 +253,7 @@ class ComicScanner:
                 logger.error("处理失败 [%s] %s: %s", cat, entry, e, exc_info=True)
                 self.stats.errors += 1
 
+            # 每50条提交一次事务，防止内存溢出
             if self.stats.total % 50 == 0:
                 db.session.commit()
                 logger.info(
@@ -254,7 +277,7 @@ class ComicScanner:
         start = time.perf_counter()
         logger.info("📦 处理压缩包: %s", path.name)
 
-        # 快速指纹（大小 + 修改时间 + 头尾哈希）
+        # 快速指纹计算
         fp_start = time.perf_counter()
         file_fingerprint = fast_file_fingerprint(path)
         fp_cost = time.perf_counter() - fp_start
@@ -262,18 +285,21 @@ class ComicScanner:
 
         file_size = path.stat().st_size
 
-        # 统计页数
+        # 压缩包页数统计
         count_start = time.perf_counter()
         page_count = _count_zip_pages(path)
         count_cost = time.perf_counter() - count_start
         logger.info("   └─ 页数统计: %.2fs (%d 页)", count_cost, page_count)
 
+        # 查重判断
         existing = self._find_existing(path.name, parent_id)
         if existing and existing.file_hash == file_fingerprint and existing.relative_path == rel_path:
             self.stats.skipped += 1
+            self.valid_media_ids.add(existing.id)
             logger.info("   └─ 跳过 (内容未变化)")
             return
 
+        # 新增/更新记录
         media = existing or Media(
             media_type=MediaType.IMAGE, file_name=path.name, status=MediaStatus.READY,
             parent_id=parent_id, is_dir=0,
@@ -294,7 +320,11 @@ class ComicScanner:
             self.stats.updated += 1
             logger.info("   └─ 更新记录, media_id=%d", media.id)
 
+        # 同步图片元数据
         self._upsert_image_meta(media.id, is_archive=1, page_count=page_count)
+        
+        # 记录有效ID
+        self.valid_media_ids.add(media.id)
 
         total_cost = time.perf_counter() - start
         logger.info("✅ 压缩包处理完成 [%s] 总耗时 %.2fs", path.name, total_cost)
@@ -313,7 +343,7 @@ class ComicScanner:
             logger.info("   └─ 跳过 (无图片)")
             return
 
-        # 文件夹指纹
+        # 文件夹指纹计算
         fp_start = time.perf_counter()
         file_fingerprint = folder_fingerprint(path)
         fp_cost = time.perf_counter() - fp_start
@@ -321,24 +351,27 @@ class ComicScanner:
 
         file_size = sum(f.stat().st_size for f in images)
 
-        # 提取尺寸
+        # 提取封面尺寸
         dims_start = time.perf_counter()
         dims = _first_image_dims(path)
         dims_cost = time.perf_counter() - dims_start
         logger.info("   └─ 提取尺寸: %.2fs", dims_cost)
 
-        # 提取主色
+        # 提取封面主色
         color_start = time.perf_counter()
         color = _extract_main_color(path)
         color_cost = time.perf_counter() - color_start
         logger.info("   └─ 提取主色: %.2fs", color_cost)
 
+        # 查重判断
         existing = self._find_existing(path.name, parent_id)
         if existing and existing.file_hash == file_fingerprint and existing.relative_path == rel_path:
             self.stats.skipped += 1
+            self.valid_media_ids.add(existing.id)
             logger.info("   └─ 跳过 (内容未变化)")
             return
 
+        # 新增/更新记录
         media = existing or Media(
             media_type=MediaType.IMAGE, file_name=path.name, status=MediaStatus.READY,
             parent_id=parent_id, is_dir=1, dir_name=path.name,
@@ -360,21 +393,27 @@ class ComicScanner:
             self.stats.updated += 1
             logger.info("   └─ 更新记录, media_id=%d", media.id)
 
+        # 同步图片元数据
         self._upsert_image_meta(
             media.id, is_archive=0, page_count=len(images),
             width=dims[0] if dims else None,
             height=dims[1] if dims else None,
             main_color=color
         )
+        
+        # 记录有效ID
+        self.valid_media_ids.add(media.id)
 
         total_cost = time.perf_counter() - start
         logger.info("✅ 图片目录处理完成 [%s] 总耗时 %.2fs", path.name, total_cost)
 
+    # 【原版逻辑完全还原】未修改任何目录类型判断代码
     def _process_directory(self, path: Path, parent_id, rel_path: str) -> Optional[int]:
         start = time.perf_counter()
         existing = self._find_existing(path.name, parent_id)
         if existing and existing.is_dir == 1 and existing.relative_path == rel_path:
             self.stats.skipped += 1
+            self.valid_media_ids.add(existing.id)
             logger.debug("📁 目录已存在 [%s] (跳过)", path.name)
             return existing.id
 
@@ -399,9 +438,99 @@ class ComicScanner:
             media_id = media.id
             logger.info("📁 新增目录 [%s] media_id=%d", path.name, media_id)
 
+        # 记录有效ID
+        self.valid_media_ids.add(media_id)
+
         total_cost = time.perf_counter() - start
         logger.debug("📁 目录处理完成 [%s] 耗时 %.3fs", path.name, total_cost)
         return media_id
+
+    # 【重写核心：严格仅清理media_type=1的漫画数据】
+    def _clean_expired_image_data(self):
+        """
+        脏数据清理核心逻辑
+        严格限制：仅操作 media_type=1（MediaType.IMAGE）的记录，其他类型完全不触碰
+        """
+        logger.info("🧹 开始仅漫画类型脏数据清理...")
+        clean_start = time.perf_counter()
+
+        # ====================== 严格限制1：仅查询media_type=1的记录 ======================
+        # 只查漫画类型的记录，其他类型（目录、小说、视频等）全程不查询、不处理
+        all_image_records = Media.query.filter(Media.media_type == MediaType.IMAGE).all()
+        if not all_image_records:
+            logger.info("✅ 数据库中无漫画类型记录，无需清理")
+            return
+
+        # ====================== 严格限制2：仅处理本次扫描根路径下的记录 ======================
+        # 过滤出属于本次扫描目录的漫画记录，防止误删其他扫描任务的漫画数据
+        scan_related_image_ids = set()
+        for record in all_image_records:
+            # 跳过无相对路径的异常记录
+            if not record.relative_path or record.relative_path == ".":
+                continue
+            try:
+                # 校验记录的完整路径是否在本次扫描的根目录下
+                record_full_path = self.base_path / record.relative_path
+                if self.base_path in record_full_path.parents:
+                    scan_related_image_ids.add(record.id)
+            except Exception as e:
+                logger.warning("跳过路径校验异常的记录 media_id=%d: %s", record.id, e)
+                continue
+
+        if not scan_related_image_ids:
+            logger.info("✅ 本次扫描目录下无漫画类型记录，无需清理")
+            return
+
+        # ====================== 安全锁：空扫描不执行清理 ======================
+        # 防止目录挂载失败、权限异常等情况，扫描不到任何文件，导致误删全库
+        if not self.valid_media_ids:
+            logger.warning("⚠️ 本次扫描未发现任何有效文件，为防止误删，跳过清理流程")
+            return
+
+        # ====================== 计算待清理的过期ID ======================
+        # 过期定义：在本次扫描目录的漫画记录里，但本次扫描磁盘上不存在的记录
+        expired_image_ids = scan_related_image_ids - self.valid_media_ids
+
+        if not expired_image_ids:
+            logger.info("✅ 无过期漫画数据，无需清理")
+            return
+
+        logger.warning("⚠️  发现 %d 条过期漫画记录，待清理ID: %s", len(expired_image_ids), sorted(list(expired_image_ids)))
+
+        # ====================== 干跑模式：只打印不删除 ======================
+        if self.dry_run:
+            logger.info("🔕 干跑模式已开启，不执行实际删除操作")
+            return
+
+        # ====================== 执行安全删除 ======================
+        try:
+            # 先级联删除关联的图片元数据
+            meta_deleted_count = MediaImageMeta.query.filter(
+                MediaImageMeta.media_id.in_(expired_image_ids)
+            ).delete(synchronize_session=False)
+
+            # 再删除漫画主记录（严格仅删除media_type=1的过期记录）
+            media_deleted_count = Media.query.filter(
+                Media.id.in_(expired_image_ids),
+                Media.media_type == MediaType.IMAGE  # 双重保险，再次限定类型
+            ).delete(synchronize_session=False)
+
+            # 刷新会话，统计删除数量
+            db.session.flush()
+            self.stats.deleted = media_deleted_count
+
+            logger.info(
+                "✅ 清理完成：删除漫画主记录 %d 条，关联图片元数据 %d 条",
+                media_deleted_count, meta_deleted_count
+            )
+
+        except Exception as e:
+            logger.error("❌ 清理过期漫画数据失败: %s", e, exc_info=True)
+            # 清理失败回滚，不影响扫描结果的提交
+            db.session.rollback()
+
+        total_clean_time = time.perf_counter() - clean_start
+        logger.info("🧹 漫画数据清理任务结束，耗时 %.2fs", total_clean_time)
 
     def _upsert_image_meta(self, media_id, is_archive, page_count=0, width=None, height=None, main_color=None):
         meta = MediaImageMeta.query.filter_by(media_id=media_id).first()

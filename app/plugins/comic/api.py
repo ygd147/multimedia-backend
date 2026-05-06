@@ -44,15 +44,28 @@ def scan_trigger():
 # ────────────────────────────────────────────────────────────
 @media_bp.get("")
 def media_list():
+    """
+    媒体列表接口
+    行为逻辑：
+    1. 传 parent_id: 浏览模式 -> 返回该目录下的直接子文件/子目录
+    2. 不传 parent_id: 聚合模式 -> 全局搜索，结果按父目录聚合去重返回
+    """
+    # 获取参数
+    page = request.args.get("page", 1, type=int)
+    per_page = request.args.get("per_page", 20, type=int)
+    media_type = request.args.get("media_type", type=int)
+    keyword = request.args.get("keyword", "").strip()
+    parent_id = request.args.get("parent_id", type=int)
+
+    # 调用 Service (不再做自动找根目录的逻辑，完全由参数决定行为)
     result = ComicService.list_media(
-        page=request.args.get("page", 1, type=int),
-        per_page=request.args.get("per_page", 20, type=int),
-        media_type=request.args.get("media_type", type=int),
-        keyword=request.args.get("keyword", "").strip(),
-        parent_id=request.args.get("parent_id", type=int),
+        page=page,
+        per_page=per_page,
+        media_type=media_type,
+        keyword=keyword,
+        parent_id=parent_id,
     )
     return _ok(result)
-
 
 @media_bp.get("/<int:media_id>")
 def media_detail(media_id: int):

@@ -26,25 +26,64 @@ class ComicService:
         keyword: str = "",
         parent_id: Optional[int] = None,
     ) -> dict:
-        q = Media.query
-        if media_type is not None and parent_id is None:
-            type_root_map = {1: "comic", 2: "novel", 3: "video"}
-            root_name = type_root_map.get(media_type)
-            if root_name:
-                root = Media.query.filter(Media.file_name == root_name, Media.parent_id.is_(None)).first()
-                if root:
-                    parent_id = root.id
+        # --- 核心逻辑分支：由 parent_id 决定一切 ---
+        
+        # 分支 A：明确传入了 parent_id -> 【浏览模式】
         if parent_id is not None:
-            q = q.filter(Media.parent_id == parent_id)
-        elif media_type is not None:
-            q = q.filter(Media.media_type == media_type)
-        if keyword:
-            q = q.filter(Media.file_name.ilike(f"%{keyword}%"))
+            q = Media.query.filter(Media.parent_id == parent_id)
+            if media_type is not None:
+                q = q.filter(Media.media_type == media_type)
+            if keyword:
+                q = q.filter(Media.file_name.ilike(f"%{keyword}%"))
+            
+            # 排序：目录永远在前，内部按时间倒序
+            items = q.order_by(
+                Media.is_dir.desc(), 
+                Media.created_at.desc()
+            ).offset((page - 1) * per_page).limit(per_page).all()
+            
+            total = q.count()
 
-        total = q.count()
-        items = q.order_by(Media.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
-        return {"items": [_serialize(m) for m in items], "total": total, "page": page, "per_page": per_page}
+        # 分支 B：未传入 parent_id -> 【聚合搜索模式】
+        else:
+            # 基础查询构建
+            base_q = Media.query
+            if media_type is not None:
+                base_q = base_q.filter(Media.media_type == media_type)
+            if keyword:
+                base_q = base_q.filter(Media.file_name.ilike(f"%{keyword}%"))
 
+            # 1. 先获取所有符合条件的记录的 ID 关系
+            all_candidates = base_q.with_entities(Media.id, Media.parent_id).all()
+            
+            if not all_candidates:
+                return {"items": [], "total": 0, "page": page, "per_page": per_page}
+
+            # 2. 计算聚合后的展示 ID
+            display_ids = set()
+            for mid, mpid in all_candidates:
+                # 逻辑：有爸爸找爸爸，没爸爸展示自己
+                display_ids.add(mpid if mpid is not None else mid)
+            
+            # 3. 查询最终要展示的对象
+            final_q = Media.query.filter(Media.id.in_(display_ids))
+            
+            # 排序：目录排前
+            final_query = final_q.order_by(
+                Media.is_dir.desc(),
+                Media.created_at.desc()
+            )
+            
+            # 分页
+            total = final_query.count()
+            items = final_query.offset((page - 1) * per_page).limit(per_page).all()
+
+        return {
+            "items": [_serialize(m) for m in items], 
+            "total": total, 
+            "page": page, 
+            "per_page": per_page
+        }
     @staticmethod
     def get_detail(media_id: int) -> Optional[dict]:
         media = Media.query.get(media_id)
