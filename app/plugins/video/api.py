@@ -14,6 +14,7 @@ from .service import VideoService
 logger = logging.getLogger(__name__)
 
 video_bp = Blueprint("video", __name__)
+THUMBNAIL_DIR = Path("/home/ygd/data/thumbnails")
 
 
 # ────────────────────────────────────────────────────────────
@@ -85,6 +86,19 @@ def delete_video(video_id: int):
     db.session.commit()
     return _ok({"message": "已删除"})
 
+
+@video_bp.get('/thumbnail/<file_hash>')
+def get_video_thumbnail(file_hash):
+    """根据文件的 hash 直接返回对应的缩略图"""
+    # 防止恶意遍历路径，只保留合法文件名字符
+    safe_hash = Path(file_hash).stem
+    thumb_file = f"{safe_hash}.jpg"
+    thumb_abs = THUMBNAIL_DIR / thumb_file
+
+    if not thumb_abs.exists():
+        return {"msg": "暂无缩略图"}, 404
+
+    return send_from_directory(str(THUMBNAIL_DIR), thumb_file, mimetype='image/jpeg')
 
 # ────────────────────────────────────────────────────────────
 #  工具
