@@ -35,6 +35,8 @@ class Config:
     COMIC_BASE_PATH = os.getenv("COMIC_BASE_PATH", "/data/comics")
     # ---------- 视频 ----------
     VIDEO_BASE_PATH = os.getenv("VIDEO_BASE_PATH", "/data/video")
+    # ---------- 小说 ----------
+    NOVEL_BASE_PATH = os.getenv("NOVEL_BASE_PATH", "/data/video")
     # ---------- 插件 ----------
     ENABLED_PLUGINS = [
         p.strip() for p in os.getenv("ENABLED_PLUGINS", "comic").split(",") if p.strip()

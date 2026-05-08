@@ -88,7 +88,8 @@ class MediaNovelMeta(db.Model):
     author     = Column(String(255), nullable=False, default="")
     word_count = Column(Integer, nullable=False, default=0)
     encoding   = Column(String(32), nullable=False, default="")
-
+    total_chapters = Column(Integer, nullable=False, default=0, comment="总章节数")
+    total_chars    = Column(BigInteger, nullable=False, default=0, comment="总字数")
 
 class MediaVideoMeta(db.Model):
     __tablename__ = "media_video_meta"
@@ -103,4 +104,20 @@ class MediaVideoMeta(db.Model):
 
     __table_args__ = (
         Index("idx_transcoded", "is_transcoded"),
+    )
+
+
+
+
+class NovelChapter(db.Model):
+    __tablename__ = "novel_chapter"
+    
+    id = db.Column(BigInteger, primary_key=True, autoincrement=True)
+    media_id = db.Column(BigInteger, nullable=False, index=True)  # ⭐ 去掉 ForeignKey
+    chapter_title = db.Column(String(255), nullable=False, comment="章节名")
+    chapter_order = db.Column(Integer, nullable=False, default=0, comment="排序号")
+    content = db.Column(db.Text(16777215), nullable=False, comment="正文内容")
+    word_count = db.Column(Integer, nullable=False, default=0, comment="章节字数")
+    __table_args__ = (
+        Index("idx_media_order", "media_id", "chapter_order"),
     )

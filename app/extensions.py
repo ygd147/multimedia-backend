@@ -34,3 +34,22 @@ def shutdown_scheduler():
     """停止调度器 — 放在这里统一管理"""
     if scheduler.running:
         scheduler.shutdown(wait=False)
+
+
+class PluginSwitcher:
+    """插件扫描开关管理器"""
+    def __init__(self):
+        self.states = {
+            "comic": {"enabled": True, "running": False},
+            "video": {"enabled": True, "running": False},
+            "novel": {"enabled": True, "running": True},
+        }
+
+    def is_enabled(self, plugin: str) -> bool: return self.states.get(plugin, {}).get("enabled", False)
+    def is_running(self, plugin: str) -> bool: return self.states.get(plugin, {}).get("running", False)
+    def set_enabled(self, plugin: str, status: bool): 
+        if plugin in self.states: self.states[plugin]["enabled"] = status
+    def set_running(self, plugin: str, status: bool): 
+        if plugin in self.states: self.states[plugin]["running"] = status
+
+switcher = PluginSwitcher()
