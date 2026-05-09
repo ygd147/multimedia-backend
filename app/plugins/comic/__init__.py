@@ -21,7 +21,7 @@ class ComicPlugin(PluginBase):
                 "func": comic_scan,
                 "trigger": "interval",
                 "hours": _scan_interval(),
-                "run_on_startup": True,
+                "run_on_startup": False,
             }
         ]
 

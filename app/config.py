@@ -44,3 +44,5 @@ class Config:
 
     # ---------- 定时任务 ----------
     SCAN_INTERVAL_HOURS = int(os.getenv("SCAN_INTERVAL_HOURS", 6))
+
+    VIDEO_NEED_TRANSCODE_EXT = [".wmv", ".avi", ".rmvb", ".rm", ".mkv", ".flv"]

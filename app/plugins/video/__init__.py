@@ -17,6 +17,6 @@ class VideoPlugin(PluginBase):
                 "func": video_scan,
                 "trigger": "interval",
                 "hours": 6,
-                "run_on_startup": True,  # 启动时立即执行一次
+                "run_on_startup": False,  # 启动时立即执行一次
             }
         ]
