@@ -5,7 +5,7 @@ Video 插件 API
 import logging
 from pathlib import Path
 
-from flask import Blueprint, request, jsonify, send_file, abort
+from flask import Blueprint, request, jsonify, send_file, abort,send_from_directory
 
 from app.config import Config
 from app.models import Media, MediaType
