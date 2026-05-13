@@ -21,6 +21,7 @@ from app.plugins import PluginManager
 
 # 确保所有模型被导入，否则 create_all 不会建表
 import app.models  # noqa: F401
+from app.api.upload_routes import upload_bp
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,8 @@ def create_app() -> Flask:
     # ── 5. 插件 ──
     PluginManager.discover(Config.ENABLED_PLUGINS)
     PluginManager.register_blueprints(app)
-
+    
+    app.register_blueprint(upload_bp)
     # ── 6. 调度器 ──
     from app.scheduler import init_scheduler
     init_scheduler(app)
